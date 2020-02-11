@@ -17,7 +17,7 @@ class ImageConverter:
     @staticmethod
     def frombits(bits):
         chars = []
-        for b in range(len(bits) / 8):
+        for b in range(int(len(bits) / 8)):
             byte = bits[b*8:(b+1)*8]
             chars.append(chr(int(''.join([str(bit) for bit in byte]), 2)))
         return ''.join(chars)
@@ -29,7 +29,7 @@ class ImageConverter:
         ret = ''
         for h in range(im_binary.shape[0]):
             pixels = [im_binary[h, w] for w in range(im_binary.shape[1])]
-            binary = map(lambda x: 1 if x == 0 else 0, pixels)
+            binary = list(map(lambda x: 1 if x == 0 else 0, pixels))
             ret += ImageConverter.frombits(binary)
         return ret
 

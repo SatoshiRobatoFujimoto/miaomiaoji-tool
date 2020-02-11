@@ -5,7 +5,7 @@ __author__ = "ihciah"
 import struct, zlib, logging
 from bluetooth import BluetoothSocket, find_service, RFCOMM, discover_devices
 from const import BtCommandByte
-
+import cv2
 
 class BtManager:
     standardKey = 0x35769521
@@ -44,7 +44,7 @@ class BtManager:
                         "It may take time, you'd better specify mac address to avoid a scan.")
         valid_names = ['MiaoMiaoJi', 'Paperang']
         nearby_devices = discover_devices(lookup_names=True)
-        valid_devices = filter(lambda d: len(d) == 2 and d[1] in valid_names, nearby_devices)
+        valid_devices =  list(filter(lambda d: len(d) == 2 and d[1] in valid_names, nearby_devices))
         if len(valid_devices) == 0:
             logging.error("Cannot find device with name %s." % " or ".join(valid_names))
             return False
@@ -61,10 +61,11 @@ class BtManager:
     def scanservices(self):
         logging.info("Searching for services...")
         service_matches = find_service(uuid=self.uuid, address=self.address)
-        valid_service = filter(
-            lambda s: 'protocol' in s and 'name' in s and s['protocol'] == 'RFCOMM' and s['name'] == 'SerialPort',
+        # print(service_matches)
+        valid_service = list(filter(
+            lambda s: 'protocol' in s and 'name' in s and s['protocol'] == 'RFCOMM' and s['name'] == b'SerialPort',
             service_matches
-        )
+        ))
         if len(valid_service) == 0:
             logging.error("Cannot find valid services on device with MAC %s." % self.address)
             return False
@@ -84,7 +85,7 @@ class BtManager:
         result = struct.pack('<BBB', 2, control_command, i)
         result += struct.pack('<H', len(bytes))
         result += bytes
-        result += struct.pack('<i', self.crc32(bytes))
+        result += struct.pack('<I', self.crc32(bytes))
         result += struct.pack('<B', 3)
         return result
 
@@ -106,7 +107,7 @@ class BtManager:
         # Here we assume that there is only one received packet.
         raw_msg = self.sock.recv(self.max_recv_msg_length)
         parsed = self.resultParser(raw_msg)
-        logging.info("Recv: " + raw_msg.encode('hex'))
+        logging.info("Recv: " + raw_msg.hex())
         logging.info("Received %d packets: " % len(parsed) + "".join([str(p) for p in parsed]))
         return raw_msg, parsed
 
@@ -118,7 +119,7 @@ class BtManager:
                 def __str__(self):
                     return "\nControl command: %s(%s)\nPayload length: %d\nPayload(hex): %s" % (
                         self.command, BtCommandByte.findCommand(self.command)
-                        , self.payload_length, self.payload.encode('hex')
+                        , self.payload_length, self.payload.hex()
                     )
             info = Info()
             _, info.command, _, info.payload_length = struct.unpack('<BBBH', data[base:base+5])
@@ -147,10 +148,26 @@ class BtManager:
         msg = struct.pack('<H', poweroff_time)
         self.sendToBt(msg, BtCommandByte.PRT_SET_POWER_DOWN_TIME)
 
+    def sendBinaryToBt(self, binary_img):
+        self.sendPaperTypeToBt()
+        # msg = struct.pack("<%dc" % len(binary_img, *binary_img)
+        msgs = [binary_img[x: x+192] for x in range(0, len(binary_img), 192)] # 4*48
+        for msg in msgs:
+            self.sendToBt(msg, BtCommandByte.PRT_PRINT_DATA, need_reply=False)
+        self.sendFeedLineToBt(self.padding_line)
+
     def sendImageToBt(self, binary_img):
         self.sendPaperTypeToBt()
-        msg = struct.pack("<%dc" % len(binary_img), *binary_img)
-        self.sendToBt(msg, BtCommandByte.PRT_PRINT_DATA, need_reply=False)
+        height, width = binary_img.shape[:]
+        for line in range(height):
+            bits = [0 if x > 0 else 1 for x in binary_img[line]]
+            bits = [bits[x:x+8] for x in range(0, len(bits), 8)]
+            msg = ''
+            for bit in bits:
+                bin = '0b'+''.join(str(x) for x in bit)
+                msg += '{:02x}'.format(int(bin, 0))
+            msg = bytes.fromhex(msg)
+            self.sendToBt(msg, BtCommandByte.PRT_PRINT_DATA, need_reply=False)
         self.sendFeedLineToBt(self.padding_line)
 
     def sendSelfTestToBt(self):
@@ -192,32 +209,23 @@ class BtManager:
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.INFO)
 
-    # If you know the MAC address of your device, use this parameter to avoid a scan, which is time-consuming
-    # mmj = BtManager("69:68:63:69:61:68")
-
     # Start a scan to find valid devices
     mmj = BtManager()
 
     if mmj.connected:
         mmj.sendDensityToBt(95)
 
-        # If you want it never powered-off
-        # mmj.sendPowerOffTimeToBt(0)
-        # mmj.queryPowerOffTime()
-
         # Print an existing image(need opencv):
-        # from image_process import ImageConverter
-        # img = ImageConverter.image2bmp(r"C:\Users\Lemon\Desktop\0.jpg")
-        # mmj.sendImageToBt(img)
+        img = cv2.imread('kumamcn.png', 0)
+        ret, binary_img = cv2.threshold(img,127,255,cv2.THRESH_BINARY)
+        height, width = binary_img.shape[:]
+        binary_img = cv2.resize(binary_img, (384, int(height*384.0/width)), cv2.INTER_AREA)
+        mmj.sendImageToBt(binary_img)
 
         # Print a pure black image with 300 lines
-        # img = "\xff" * 48 * 300
-        # mmj.sendImageToBt(img)
+        # img = b'\xff' * 48 * 300
+        # mmj.sendBinaryToBt(img)
 
-        # Print 2 line of text(need opencv)
-        from image_process import TextConverter
-        img = TextConverter.text2bmp("Coded By") + TextConverter.text2bmp(__author__)
-        mmj.sendImageToBt(img)
         mmj.disconnect()
     else:
         logging.error("Oops! Cannot establish connection with Paperang devices.")
